@@ -541,3 +541,200 @@ def two_particle_green_iwn_inu_inup(
             bosonic_index_o,
         ).values()
     )
+
+
+def one_particle_time_ordered_green_tau(
+    energies: list[float],
+    c_eigenbasis: list[list[float]],
+    cd_eigenbasis: list[list[float]],
+    beta: float,
+    tau_a: float,
+    tau_b: float,
+) -> float:
+    """Time-ordered Green's function ``G(τ_a,τ_b)=-<T c(τ_a)c†(τ_b)>``."""
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+    if not (0.0 <= tau_a <= beta and 0.0 <= tau_b <= beta):
+        raise ValueError("tau_a and tau_b must satisfy 0 <= tau <= beta")
+
+    n = len(energies)
+    _validate_square_matrix(c_eigenbasis, "c_eigenbasis", n)
+    _validate_square_matrix(cd_eigenbasis, "cd_eigenbasis", n)
+
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    delta_tau = tau_a - tau_b
+
+    def _spectral_sum(dt: float) -> float:
+        total = 0.0
+        for l in range(n):
+            w_l = boltz[l]
+            for m in range(n):
+                total += (
+                    w_l
+                    * math.exp(dt * (energies[l] - energies[m]))
+                    * c_eigenbasis[l][m]
+                    * cd_eigenbasis[m][l]
+                )
+        return total / partition
+
+    if delta_tau >= 0.0:
+        return -_spectral_sum(delta_tau)
+    return _spectral_sum(beta + delta_tau)
+
+
+def disconnected_two_particle_green_iwn_inu_inup(
+    energies: list[float],
+    c1_eigenbasis: list[list[float]],
+    cd2_eigenbasis: list[list[float]],
+    c3_eigenbasis: list[list[float]],
+    cd4_eigenbasis: list[list[float]],
+    beta: float,
+    fermionic_index_n: int,
+    bosonic_index_m: int,
+    bosonic_index_o: int,
+    *,
+    include_exchange: bool,
+    tau_grid: int = 80,
+) -> complex:
+    """Disconnected contribution in the three-frequency convention used for ``G^(2)``.
+
+    The disconnected term is computed from products of one-particle propagators:
+    ``G12*G30`` and (optionally) ``-G10*G32`` for equal-spin exchange.
+    """
+    if tau_grid <= 1:
+        raise ValueError("tau_grid must be > 1")
+
+    omega_n = (2 * fermionic_index_n + 1) * math.pi / beta
+    nu_m = 2 * bosonic_index_m * math.pi / beta
+    nu_o = 2 * bosonic_index_o * math.pi / beta
+
+    dt = beta / tau_grid
+    total = 0.0 + 0.0j
+    for i in range(tau_grid):
+        tau1 = (i + 0.5) * dt
+        for j in range(tau_grid):
+            tau2 = (j + 0.5) * dt
+            g12 = one_particle_time_ordered_green_tau(
+                energies, c1_eigenbasis, cd2_eigenbasis, beta, tau1, tau2
+            )
+            for k in range(tau_grid):
+                tau3 = (k + 0.5) * dt
+                g30 = one_particle_time_ordered_green_tau(
+                    energies, c3_eigenbasis, cd4_eigenbasis, beta, tau3, 0.0
+                )
+                disconnected = g12 * g30
+                if include_exchange:
+                    g10 = one_particle_time_ordered_green_tau(
+                        energies, c1_eigenbasis, cd4_eigenbasis, beta, tau1, 0.0
+                    )
+                    g32 = one_particle_time_ordered_green_tau(
+                        energies, c3_eigenbasis, cd2_eigenbasis, beta, tau3, tau2
+                    )
+                    disconnected -= g10 * g32
+
+                kernel = cmath.exp(1j * omega_n * tau1 + 1j * nu_m * tau2 - 1j * nu_o * tau3)
+                total += kernel * disconnected
+
+    return total * (dt**3) / (beta * beta)
+
+
+def three_frequency_susceptibilities(
+    energies: list[float],
+    c_up: list[list[float]],
+    cd_up: list[list[float]],
+    c_dn: list[list[float]],
+    cd_dn: list[list[float]],
+    beta: float,
+    fermionic_index_n: int,
+    bosonic_index_m: int,
+    bosonic_index_o: int,
+    *,
+    tau_grid: int = 80,
+) -> dict[str, complex]:
+    """Compute ``χ↑↑`` and ``χ↑↓`` and spin/charge combinations.
+
+    The connected susceptibilities are defined as
+    ``χ = G^(2) - G^(2)_disc`` in the same three-frequency convention as
+    :func:`two_particle_green_iwn_inu_inup`.
+    """
+    g2_upup = two_particle_green_iwn_inu_inup(
+        energies, c_up, cd_up, c_up, cd_up, beta, fermionic_index_n, bosonic_index_m, bosonic_index_o
+    )
+    disc_upup = disconnected_two_particle_green_iwn_inu_inup(
+        energies,
+        c_up,
+        cd_up,
+        c_up,
+        cd_up,
+        beta,
+        fermionic_index_n,
+        bosonic_index_m,
+        bosonic_index_o,
+        include_exchange=True,
+        tau_grid=tau_grid,
+    )
+    chi_upup = g2_upup - disc_upup
+
+    g2_updn = two_particle_green_iwn_inu_inup(
+        energies, c_up, cd_up, c_dn, cd_dn, beta, fermionic_index_n, bosonic_index_m, bosonic_index_o
+    )
+    disc_updn = disconnected_two_particle_green_iwn_inu_inup(
+        energies,
+        c_up,
+        cd_up,
+        c_dn,
+        cd_dn,
+        beta,
+        fermionic_index_n,
+        bosonic_index_m,
+        bosonic_index_o,
+        include_exchange=False,
+        tau_grid=tau_grid,
+    )
+    chi_updn = g2_updn - disc_updn
+
+    return {
+        "chi_upup": chi_upup,
+        "chi_updn": chi_updn,
+        "chi_charge": chi_upup + chi_updn,
+        "chi_spin": chi_upup - chi_updn,
+    }
+
+
+def single_frequency_bosonic_susceptibility(
+    energies: list[float],
+    op_a_eigenbasis: list[list[float]],
+    op_b_eigenbasis: list[list[float]],
+    beta: float,
+    bosonic_index_m: int,
+) -> complex:
+    """Connected single-frequency Lehmann susceptibility ``χ_AB(iν_m)``."""
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+
+    n = len(energies)
+    _validate_square_matrix(op_a_eigenbasis, "op_a_eigenbasis", n)
+    _validate_square_matrix(op_b_eigenbasis, "op_b_eigenbasis", n)
+
+    nu_m = 2 * bosonic_index_m * math.pi / beta
+    iv = complex(0.0, nu_m)
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    total = 0.0 + 0.0j
+    for l in range(n):
+        for m in range(n):
+            num = boltz[l] - boltz[m]
+            amp = op_a_eigenbasis[l][m] * op_b_eigenbasis[m][l]
+            denom = iv + energies[l] - energies[m]
+            if abs(denom) < 1e-14:
+                continue
+            total += num * amp / denom
+
+    return total / partition
