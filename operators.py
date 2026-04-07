@@ -52,3 +52,44 @@ def annihilate(state: int, orb: int) -> tuple[int | None, int]:
     sign = _parity_left(state, orb)
     new_state = state & ~(1 << orb)
     return new_state, sign
+
+
+def anderson_impurity_hamiltonian(
+    U: float,
+    mu: float,
+    basis: list[int] | None = None,
+    up_orb: int = 0,
+    dn_orb: int = 1,
+) -> list[list[float]]:
+    """Build the Anderson impurity Hamiltonian matrix.
+
+    The model is
+
+    ``H = U n_up n_dn - mu (n_up + n_dn)``.
+
+    in a bit-encoded many-body basis. This Hamiltonian is diagonal in the
+    occupation basis.
+
+    Args:
+        U: On-site interaction strength.
+        mu: Chemical potential.
+        basis: Ordered list of bit-encoded basis states. If ``None``, the
+            canonical one-site basis ``[0b00, 0b01, 0b10, 0b11]`` is used.
+        up_orb: Orbital index used for the spin-up occupation bit.
+        dn_orb: Orbital index used for the spin-down occupation bit.
+
+    Returns:
+        Square Hamiltonian matrix as a nested list.
+    """
+    if basis is None:
+        basis = [0b00, 0b01, 0b10, 0b11]
+
+    size = len(basis)
+    ham = [[0.0 for _ in range(size)] for _ in range(size)]
+
+    for i, state in enumerate(basis):
+        n_up = (state >> up_orb) & 1
+        n_dn = (state >> dn_orb) & 1
+        ham[i][i] = U * n_up * n_dn - mu * (n_up + n_dn)
+
+    return ham
