@@ -5,7 +5,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import pytest
 
-from operators import annihilate, create
+from operators import annihilate, anderson_impurity_hamiltonian, create
 
 
 def test_create_empty_orbital_even_parity():
@@ -59,3 +59,24 @@ def test_annihilate_empty_orbital_is_zero():
 def test_negative_orbital_raises(func):
     with pytest.raises(ValueError):
         func(0b1, -1)
+
+
+def test_anderson_impurity_hamiltonian_default_basis_diagonal():
+    ham = anderson_impurity_hamiltonian(U=4.0, mu=1.5)
+    assert ham == [
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, -1.5, 0.0, 0.0],
+        [0.0, 0.0, -1.5, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+
+
+def test_anderson_impurity_hamiltonian_custom_basis_ordering():
+    basis = [0b11, 0b00, 0b10, 0b01]
+    ham = anderson_impurity_hamiltonian(U=3.0, mu=0.5, basis=basis)
+    assert ham == [
+        [2.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, -0.5, 0.0],
+        [0.0, 0.0, 0.0, -0.5],
+    ]
