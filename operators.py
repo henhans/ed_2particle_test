@@ -12,6 +12,8 @@ The fermionic phase for acting on orbital ``orb`` is ``(-1)**N_left`` where
 
 from __future__ import annotations
 
+import math
+
 
 def _parity_left(state: int, orb: int) -> int:
     """Return the fermionic sign from occupied orbitals left of ``orb``."""
@@ -93,3 +95,105 @@ def anderson_impurity_hamiltonian(
         ham[i][i] = U * n_up * n_dn - mu * (n_up + n_dn)
 
     return ham
+
+
+def diagonalize_symmetric(matrix: list[list[float]]) -> tuple[list[float], list[list[float]]]:
+    """Diagonalize a real symmetric matrix with a Jacobi rotation method.
+
+    Args:
+        matrix: Square, real symmetric matrix.
+
+    Returns:
+        ``(eigenvalues, eigenvectors)`` where eigenvectors are returned as columns
+        of the nested list matrix.
+    """
+    n = len(matrix)
+    if n == 0:
+        return [], []
+    if any(len(row) != n for row in matrix):
+        raise ValueError("matrix must be square")
+
+    a = [[float(v) for v in row] for row in matrix]
+    for i in range(n):
+        for j in range(i + 1, n):
+            if abs(a[i][j] - a[j][i]) > 1e-12:
+                raise ValueError("matrix must be symmetric")
+
+    v = [[1.0 if i == j else 0.0 for j in range(n)] for i in range(n)]
+
+    def max_offdiag() -> tuple[float, int, int]:
+        value = 0.0
+        p = q = 0
+        for i in range(n):
+            for j in range(i + 1, n):
+                candidate = abs(a[i][j])
+                if candidate > value:
+                    value = candidate
+                    p, q = i, j
+        return value, p, q
+
+    max_sweeps = 50 * n * n
+    for _ in range(max_sweeps):
+        offdiag, p, q = max_offdiag()
+        if offdiag < 1e-12:
+            break
+
+        app = a[p][p]
+        aqq = a[q][q]
+        apq = a[p][q]
+
+        tau = (aqq - app) / (2.0 * apq)
+        t = math.copysign(1.0, tau) / (abs(tau) + math.sqrt(1.0 + tau * tau))
+        c = 1.0 / math.sqrt(1.0 + t * t)
+        s = t * c
+
+        a[p][p] = app - t * apq
+        a[q][q] = aqq + t * apq
+        a[p][q] = a[q][p] = 0.0
+
+        for k in range(n):
+            if k not in (p, q):
+                akp = a[k][p]
+                akq = a[k][q]
+                a[k][p] = a[p][k] = c * akp - s * akq
+                a[k][q] = a[q][k] = s * akp + c * akq
+
+        for k in range(n):
+            vkp = v[k][p]
+            vkq = v[k][q]
+            v[k][p] = c * vkp - s * vkq
+            v[k][q] = s * vkp + c * vkq
+    else:
+        raise RuntimeError("Jacobi diagonalization did not converge")
+
+    eigvals = [a[i][i] for i in range(n)]
+    order = sorted(range(n), key=lambda i: eigvals[i])
+    eigvals_sorted = [eigvals[i] for i in order]
+    eigvecs_sorted = [[v[row][i] for i in order] for row in range(n)]
+    return eigvals_sorted, eigvecs_sorted
+
+
+def transform_to_eigenbasis(matrix: list[list[float]], eigenvectors: list[list[float]]) -> list[list[float]]:
+    """Transform an operator into the eigenbasis given by column eigenvectors.
+
+    Computes ``V^T A V`` where ``A`` is ``matrix`` and ``V`` is ``eigenvectors``.
+    """
+    n = len(matrix)
+    if n == 0:
+        return []
+    if any(len(row) != n for row in matrix):
+        raise ValueError("matrix must be square")
+    if len(eigenvectors) != n or any(len(row) != n for row in eigenvectors):
+        raise ValueError("eigenvectors must be a square matrix matching matrix size")
+
+    tmp = [[0.0 for _ in range(n)] for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            tmp[i][j] = sum(matrix[i][k] * eigenvectors[k][j] for k in range(n))
+
+    transformed = [[0.0 for _ in range(n)] for _ in range(n)]
+    for i in range(n):
+        for j in range(n):
+            transformed[i][j] = sum(eigenvectors[k][i] * tmp[k][j] for k in range(n))
+
+    return transformed
