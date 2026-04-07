@@ -14,6 +14,9 @@ from operators import (
     diagonalize_symmetric,
     lehmann_green_iwn,
     lehmann_green_tau,
+    one_particle_time_ordered_green_tau,
+    single_frequency_bosonic_susceptibility,
+    three_frequency_susceptibilities,
     two_particle_green_iwn_inu_inup,
     two_particle_green_tau,
     two_particle_green_tau_contributions,
@@ -241,37 +244,6 @@ def test_two_particle_frequency_matches_numerical_tau_integral_with_regularizati
     assert g_iw == pytest.approx(numeric, rel=2e-2, abs=2e-2)
 
 
-def _one_particle_time_ordered_green(
-    energies: list[float],
-    c_eig: list[list[float]],
-    cd_eig: list[list[float]],
-    beta: float,
-    tau_a: float,
-    tau_b: float,
-) -> float:
-    import math
-
-    z = sum(math.exp(-beta * e) for e in energies)
-    dt = tau_a - tau_b
-
-    def spectral_sum(delta_tau: float) -> float:
-        total = 0.0
-        for l in range(len(energies)):
-            w_l = math.exp(-beta * energies[l])
-            for m in range(len(energies)):
-                total += (
-                    w_l
-                    * math.exp(delta_tau * (energies[l] - energies[m]))
-                    * c_eig[l][m]
-                    * cd_eig[m][l]
-                )
-        return total / z
-
-    if dt >= 0.0:
-        return -spectral_sum(dt)
-    return spectral_sum(beta + dt)
-
-
 def test_two_particle_green_reduces_to_wick_in_non_interacting_limit():
     U = 0.0
     mu = 0.37
@@ -291,10 +263,10 @@ def test_two_particle_green_reduces_to_wick_in_non_interacting_limit():
         energies, c_up_eig, cd_up_eig, c_up_eig, cd_up_eig, beta, tau1, tau2, tau3
     )
 
-    g12 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau1, tau2)
-    g30 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau3, 0.0)
-    g10 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau1, 0.0)
-    g32 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau3, tau2)
+    g12 = one_particle_time_ordered_green_tau(energies, c_up_eig, cd_up_eig, beta, tau1, tau2)
+    g30 = one_particle_time_ordered_green_tau(energies, c_up_eig, cd_up_eig, beta, tau3, 0.0)
+    g10 = one_particle_time_ordered_green_tau(energies, c_up_eig, cd_up_eig, beta, tau1, 0.0)
+    g32 = one_particle_time_ordered_green_tau(energies, c_up_eig, cd_up_eig, beta, tau3, tau2)
 
     wick = g12 * g30 - g10 * g32
     assert g2 == pytest.approx(wick, rel=1e-11, abs=1e-11)
@@ -318,3 +290,75 @@ def test_two_particle_static_sum_rule_equal_time_anticommutator():
     term_2 = two_particle_green_tau(energies, cd_up, c_up, identity, identity, beta, t + eps, t, 0.0)
 
     assert (term_1 + term_2) == pytest.approx(1.0, rel=2e-6, abs=2e-6)
+
+
+def test_three_frequency_susceptibilities_vanish_in_non_interacting_limit():
+    U = 0.0
+    mu = 0.2
+    beta = 4.0
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+    c_up = transform_to_eigenbasis(annihilation_operator_matrix(basis, orb=0), eigvecs)
+    cd_up = transform_to_eigenbasis(creation_operator_matrix(basis, orb=0), eigvecs)
+    c_dn = transform_to_eigenbasis(annihilation_operator_matrix(basis, orb=1), eigvecs)
+    cd_dn = transform_to_eigenbasis(creation_operator_matrix(basis, orb=1), eigvecs)
+
+    chi = three_frequency_susceptibilities(
+        energies, c_up, cd_up, c_dn, cd_dn, beta, fermionic_index_n=0, bosonic_index_m=1, bosonic_index_o=1, tau_grid=28
+    )
+
+    assert chi["chi_upup"] == pytest.approx(0.0, abs=3e-2)
+    assert chi["chi_updn"] == pytest.approx(0.0, abs=3e-2)
+    assert chi["chi_charge"] == pytest.approx(0.0, abs=5e-2)
+    assert chi["chi_spin"] == pytest.approx(0.0, abs=5e-2)
+
+
+def test_single_frequency_bosonic_susceptibility_matches_tau_integral():
+    import cmath
+    import math
+
+    beta = 5.0
+    U = 2.0
+    mu = 0.8
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+    n_states = len(energies)
+    n_up_occ = [[0.0 for _ in range(n_states)] for _ in range(n_states)]
+    n_dn_occ = [[0.0 for _ in range(n_states)] for _ in range(n_states)]
+    for i, state in enumerate(basis):
+        n_up_occ[i][i] = float((state >> 0) & 1)
+        n_dn_occ[i][i] = float((state >> 1) & 1)
+    n_up = transform_to_eigenbasis(n_up_occ, eigvecs)
+    n_dn = transform_to_eigenbasis(n_dn_occ, eigvecs)
+
+    m = 1
+    chi_single = single_frequency_bosonic_susceptibility(energies, n_up, n_dn, beta, m)
+
+    z = sum(math.exp(-beta * e) for e in energies)
+    n_up_avg = sum(math.exp(-beta * energies[l]) * n_up[l][l] for l in range(n_states)) / z
+    n_dn_avg = sum(math.exp(-beta * energies[l]) * n_dn[l][l] for l in range(n_states)) / z
+    nu = 2 * m * math.pi / beta
+
+    grid = 300
+    dt = beta / grid
+    numeric = 0.0 + 0.0j
+    for i in range(grid):
+        tau = (i + 0.5) * dt
+        corr = 0.0
+        for l in range(n_states):
+            for n in range(n_states):
+                corr += (
+                    math.exp(-beta * energies[l])
+                    * math.exp(tau * (energies[l] - energies[n]))
+                    * n_up[l][n]
+                    * n_dn[n][l]
+                )
+        corr = corr / z - n_up_avg * n_dn_avg
+        numeric += cmath.exp(1j * nu * tau) * corr
+    numeric *= dt
+
+    assert chi_single == pytest.approx(numeric, rel=3e-2, abs=3e-2)
