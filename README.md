@@ -21,3 +21,23 @@ Generate fixed-particle sector:
 ```bash
 python fock_basis.py 4 --num-particles 2
 ```
+
+## Plotting scripts
+
+Install plotting dependency:
+
+```bash
+pip install matplotlib
+```
+
+Generate a single-particle imaginary-time Green's function plot:
+
+```bash
+python scripts/plot_single_particle_green.py --beta 10 --U 4 --mu 2 --output g_tau.png
+```
+
+Generate the six time-order contribution plot for a two-particle Green's function point:
+
+```bash
+python scripts/plot_two_particle_contributions.py --beta 10 --U 4 --mu 2 --tau1 8 --tau2 5 --tau3 2 --output g2_contributions.png
+```
