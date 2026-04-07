@@ -7,9 +7,13 @@ import pytest
 
 from operators import (
     annihilate,
+    annihilation_operator_matrix,
     anderson_impurity_hamiltonian,
+    creation_operator_matrix,
     create,
     diagonalize_symmetric,
+    lehmann_green_iwn,
+    lehmann_green_tau,
     transform_to_eigenbasis,
 )
 
@@ -127,3 +131,64 @@ def test_diagonalize_requires_square_and_symmetric():
 def test_transform_to_eigenbasis_dimension_checks():
     with pytest.raises(ValueError):
         transform_to_eigenbasis([[1.0, 0.0], [0.0, 1.0]], [[1.0]])
+
+
+def test_creation_annihilation_operator_matrices_one_site():
+    basis = [0b00, 0b01, 0b10, 0b11]
+    c_up = annihilation_operator_matrix(basis, orb=0)
+    cdg_up = creation_operator_matrix(basis, orb=0)
+
+    assert c_up == [
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+        [0.0, 0.0, 0.0, 0.0],
+    ]
+
+    for i in range(4):
+        for j in range(4):
+            assert cdg_up[i][j] == c_up[j][i]
+
+
+def test_lehmann_green_iwn_matches_anderson_atom_formula():
+    import math
+
+    U = 3.0
+    mu = 1.1
+    beta = 5.0
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+    c_up_occ = annihilation_operator_matrix(basis, orb=0)
+    c_up_eig = transform_to_eigenbasis(c_up_occ, eigvecs)
+
+    z = 1.0 + 2.0 * math.exp(beta * mu) + math.exp(beta * (2.0 * mu - U))
+    n_dn = (math.exp(beta * mu) + math.exp(beta * (2.0 * mu - U))) / z
+
+    for n in (-2, -1, 0, 1, 2):
+        giwn = lehmann_green_iwn(energies, c_up_eig, beta=beta, matsubara_index=n)
+        omega_n = (2 * n + 1) * math.pi / beta
+        expected = (1.0 - n_dn) / complex(mu, omega_n) + n_dn / complex(mu - U, omega_n)
+        assert giwn == pytest.approx(expected, rel=1e-10, abs=1e-10)
+
+
+def test_lehmann_green_tau_matches_anderson_atom_formula():
+    import math
+
+    U = 4.0
+    mu = 1.7
+    beta = 6.0
+    tau = 1.25
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+    c_up_occ = annihilation_operator_matrix(basis, orb=0)
+    c_up_eig = transform_to_eigenbasis(c_up_occ, eigvecs)
+
+    g_tau = lehmann_green_tau(energies, c_up_eig, beta=beta, tau=tau)
+
+    z = 1.0 + 2.0 * math.exp(beta * mu) + math.exp(beta * (2.0 * mu - U))
+    expected = -(math.exp(tau * mu) + math.exp(beta * mu - tau * (U - mu))) / z
+    assert g_tau == pytest.approx(expected, rel=1e-11, abs=1e-11)

@@ -56,6 +56,52 @@ def annihilate(state: int, orb: int) -> tuple[int | None, int]:
     return new_state, sign
 
 
+def annihilation_operator_matrix(basis: list[int], orb: int) -> list[list[float]]:
+    """Build the annihilation operator matrix for a chosen orbital.
+
+    The returned matrix ``c`` is in the occupation basis provided by ``basis``
+    with elements ``c[m][n] = <m|c_orb|n>``.
+    """
+    if orb < 0:
+        raise ValueError("orb must be non-negative")
+
+    size = len(basis)
+    state_to_index = {state: i for i, state in enumerate(basis)}
+    operator = [[0.0 for _ in range(size)] for _ in range(size)]
+
+    for n, state in enumerate(basis):
+        new_state, sign = annihilate(state, orb)
+        if new_state is None:
+            continue
+        m = state_to_index.get(new_state)
+        if m is None:
+            raise ValueError("basis must be closed under annihilation on the selected orbital")
+        operator[m][n] = float(sign)
+
+    return operator
+
+
+def creation_operator_matrix(basis: list[int], orb: int) -> list[list[float]]:
+    """Build the creation operator matrix for a chosen orbital."""
+    if orb < 0:
+        raise ValueError("orb must be non-negative")
+
+    size = len(basis)
+    state_to_index = {state: i for i, state in enumerate(basis)}
+    operator = [[0.0 for _ in range(size)] for _ in range(size)]
+
+    for n, state in enumerate(basis):
+        new_state, sign = create(state, orb)
+        if new_state is None:
+            continue
+        m = state_to_index.get(new_state)
+        if m is None:
+            raise ValueError("basis must be closed under creation on the selected orbital")
+        operator[m][n] = float(sign)
+
+    return operator
+
+
 def anderson_impurity_hamiltonian(
     U: float,
     mu: float,
@@ -197,3 +243,70 @@ def transform_to_eigenbasis(matrix: list[list[float]], eigenvectors: list[list[f
             transformed[i][j] = sum(eigenvectors[k][i] * tmp[k][j] for k in range(n))
 
     return transformed
+
+
+def lehmann_green_tau(
+    energies: list[float],
+    c_eigenbasis: list[list[float]],
+    beta: float,
+    tau: float,
+) -> float:
+    """Evaluate ``G(tau)`` from a Lehmann representation.
+
+    Uses the fermionic convention for ``0 <= tau <= beta``:
+
+    ``G(tau) = -(1/Z) * sum_{m,n} exp(-beta E_m) exp(tau(E_m-E_n)) |<m|c|n>|^2``.
+    """
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+    if tau < 0.0 or tau > beta:
+        raise ValueError("tau must satisfy 0 <= tau <= beta")
+
+    n = len(energies)
+    if len(c_eigenbasis) != n or any(len(row) != n for row in c_eigenbasis):
+        raise ValueError("c_eigenbasis must match energies dimensions")
+
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    total = 0.0
+    for m in range(n):
+        for nn in range(n):
+            amp = c_eigenbasis[m][nn]
+            total += boltz[m] * math.exp(tau * (energies[m] - energies[nn])) * (amp * amp)
+
+    return -total / partition
+
+
+def lehmann_green_iwn(
+    energies: list[float],
+    c_eigenbasis: list[list[float]],
+    beta: float,
+    matsubara_index: int,
+) -> complex:
+    """Evaluate ``G(iω_n)`` from the fermionic Lehmann representation."""
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+
+    n = len(energies)
+    if len(c_eigenbasis) != n or any(len(row) != n for row in c_eigenbasis):
+        raise ValueError("c_eigenbasis must match energies dimensions")
+
+    omega_n = (2 * matsubara_index + 1) * math.pi / beta
+    iwn = complex(0.0, omega_n)
+
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    total = 0.0 + 0.0j
+    for m in range(n):
+        for nn in range(n):
+            amp = c_eigenbasis[m][nn]
+            weight = amp * amp
+            total += ((boltz[m] + boltz[nn]) * weight) / (iwn + energies[m] - energies[nn])
+
+    return total / partition
