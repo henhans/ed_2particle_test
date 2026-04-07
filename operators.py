@@ -13,6 +13,8 @@ The fermionic phase for acting on orbital ``orb`` is ``(-1)**N_left`` where
 from __future__ import annotations
 
 import math
+import cmath
+from itertools import permutations
 
 
 def _parity_left(state: int, orb: int) -> int:
@@ -310,3 +312,232 @@ def lehmann_green_iwn(
             total += ((boltz[m] + boltz[nn]) * weight) / (iwn + energies[m] - energies[nn])
 
     return total / partition
+
+
+def _perm_sign(order: tuple[int, int, int]) -> int:
+    inversions = 0
+    for i in range(len(order)):
+        for j in range(i + 1, len(order)):
+            if order[i] > order[j]:
+                inversions += 1
+    return -1 if (inversions % 2) else 1
+
+
+def _i1_exp(beta: float, a: complex) -> complex:
+    if abs(a) < 1e-14:
+        return complex(beta, 0.0)
+    return cmath.exp(a * beta) / a - 1.0 / a
+
+
+def _d_i1_exp(beta: float, a: complex) -> complex:
+    if abs(a) < 1e-10:
+        return complex(0.5 * beta * beta, 0.0)
+    exp_term = cmath.exp(a * beta)
+    return (beta * a * exp_term - exp_term + 1.0) / (a * a)
+
+
+def _i2_ordered(beta: float, a: complex, b: complex) -> complex:
+    if abs(b) < 1e-12:
+        return _d_i1_exp(beta, a)
+    return (_i1_exp(beta, a + b) - _i1_exp(beta, a)) / b
+
+
+def _d_i2_db(beta: float, a: complex, b: complex) -> complex:
+    if abs(b) < 1e-10:
+        eps = 1e-7
+        return (_d_i1_exp(beta, a + eps) - _d_i1_exp(beta, a - eps)) / (2.0 * eps)
+    i1_ab = _i1_exp(beta, a + b)
+    i1_a = _i1_exp(beta, a)
+    return (b * _d_i1_exp(beta, a + b) - (i1_ab - i1_a)) / (b * b)
+
+
+def _i3_ordered(beta: float, a: complex, b: complex, c: complex) -> complex:
+    """Evaluate ∫_0^β dt1 e^{a t1} ∫_0^{t1} dt2 e^{b t2} ∫_0^{t2} dt3 e^{c t3}."""
+    if abs(c) < 1e-12:
+        return _d_i2_db(beta, a, b)
+    return (_i2_ordered(beta, a, b + c) - _i2_ordered(beta, a, b)) / c
+
+
+def _validate_square_matrix(matrix: list[list[float]], name: str, n: int) -> None:
+    if len(matrix) != n or any(len(row) != n for row in matrix):
+        raise ValueError(f"{name} must match energies dimensions")
+
+
+def two_particle_green_tau_contributions(
+    energies: list[float],
+    op1: list[list[float]],
+    op2: list[list[float]],
+    op3: list[list[float]],
+    op4: list[list[float]],
+    beta: float,
+    tau1: float,
+    tau2: float,
+    tau3: float,
+) -> dict[str, float]:
+    """Lehmann 2PGF ``G^(2)(τ1,τ2,τ3)=<T O1(τ1)O2(τ2)O3(τ3)O4(0)>`` split by time-order sectors."""
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+    for tau in (tau1, tau2, tau3):
+        if tau < 0.0 or tau > beta:
+            raise ValueError("all taus must satisfy 0 <= tau <= beta")
+
+    n = len(energies)
+    _validate_square_matrix(op1, "op1", n)
+    _validate_square_matrix(op2, "op2", n)
+    _validate_square_matrix(op3, "op3", n)
+    _validate_square_matrix(op4, "op4", n)
+
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    tau_values = [tau1, tau2, tau3]
+    operators = [op1, op2, op3]
+    contributions: dict[str, float] = {}
+
+    for order in permutations((0, 1, 2)):
+        if not (tau_values[order[0]] >= tau_values[order[1]] >= tau_values[order[2]]):
+            contributions[f"tau{order[0] + 1}>tau{order[1] + 1}>tau{order[2] + 1}"] = 0.0
+            continue
+
+        sign = _perm_sign(order)
+        op_a, op_b, op_c = (operators[idx] for idx in order)
+        t_a, t_b, t_c = (tau_values[idx] for idx in order)
+        total = 0.0
+        for l in range(n):
+            w_l = boltz[l]
+            for m in range(n):
+                phase_a = math.exp((energies[l] - energies[m]) * t_a)
+                elm = op_a[l][m]
+                if elm == 0.0:
+                    continue
+                for nn in range(n):
+                    phase_b = math.exp((energies[m] - energies[nn]) * t_b)
+                    emn = op_b[m][nn]
+                    if emn == 0.0:
+                        continue
+                    for k in range(n):
+                        enk = op_c[nn][k]
+                        ekl = op4[k][l]
+                        if enk == 0.0 or ekl == 0.0:
+                            continue
+                        phase_c = math.exp((energies[nn] - energies[k]) * t_c)
+                        total += w_l * phase_a * phase_b * phase_c * elm * emn * enk * ekl
+        contributions[f"tau{order[0] + 1}>tau{order[1] + 1}>tau{order[2] + 1}"] = sign * total / partition
+
+    return contributions
+
+
+def two_particle_green_tau(
+    energies: list[float],
+    op1: list[list[float]],
+    op2: list[list[float]],
+    op3: list[list[float]],
+    op4: list[list[float]],
+    beta: float,
+    tau1: float,
+    tau2: float,
+    tau3: float,
+) -> float:
+    """Total ``G^(2)(τ1,τ2,τ3)`` obtained as the sum of time-order contributions."""
+    return sum(
+        two_particle_green_tau_contributions(energies, op1, op2, op3, op4, beta, tau1, tau2, tau3).values()
+    )
+
+
+def two_particle_green_iwn_inu_inup_contributions(
+    energies: list[float],
+    op1: list[list[float]],
+    op2: list[list[float]],
+    op3: list[list[float]],
+    op4: list[list[float]],
+    beta: float,
+    fermionic_index_n: int,
+    bosonic_index_m: int,
+    bosonic_index_o: int,
+) -> dict[str, complex]:
+    """Lehmann 2PGF ``G^(2)(iω_n,iν_m,iν'_o)`` split by the six time-order sectors.
+
+    Fourier convention:
+    ``exp(+iω_n τ1) exp(+iν_m τ2) exp(-iν'_o τ3)``, with
+    ``ω_n=(2n+1)π/β`` and ``ν_m=2mπ/β``.
+    """
+    if beta <= 0.0:
+        raise ValueError("beta must be positive")
+
+    n_states = len(energies)
+    _validate_square_matrix(op1, "op1", n_states)
+    _validate_square_matrix(op2, "op2", n_states)
+    _validate_square_matrix(op3, "op3", n_states)
+    _validate_square_matrix(op4, "op4", n_states)
+
+    omega_n = (2 * fermionic_index_n + 1) * math.pi / beta
+    nu_m = 2 * bosonic_index_m * math.pi / beta
+    nu_o = 2 * bosonic_index_o * math.pi / beta
+    fourier_coeff = [complex(0.0, omega_n), complex(0.0, nu_m), complex(0.0, -nu_o)]
+
+    boltz = [math.exp(-beta * e) for e in energies]
+    partition = sum(boltz)
+    if partition == 0.0:
+        raise ValueError("partition function underflowed to zero")
+
+    operators = [op1, op2, op3]
+    contributions: dict[str, complex] = {}
+
+    for order in permutations((0, 1, 2)):
+        sign = _perm_sign(order)
+        op_a, op_b, op_c = (operators[idx] for idx in order)
+        fc_a, fc_b, fc_c = (fourier_coeff[idx] for idx in order)
+        total = 0.0 + 0.0j
+        for l in range(n_states):
+            w_l = boltz[l]
+            for m in range(n_states):
+                elm = op_a[l][m]
+                if elm == 0.0:
+                    continue
+                a = (energies[l] - energies[m]) + fc_a
+                for nn in range(n_states):
+                    emn = op_b[m][nn]
+                    if emn == 0.0:
+                        continue
+                    b = (energies[m] - energies[nn]) + fc_b
+                    for k in range(n_states):
+                        enk = op_c[nn][k]
+                        ekl = op4[k][l]
+                        if enk == 0.0 or ekl == 0.0:
+                            continue
+                        c = (energies[nn] - energies[k]) + fc_c
+                        total += w_l * elm * emn * enk * ekl * _i3_ordered(beta, a, b, c)
+
+        key = f"tau{order[0] + 1}>tau{order[1] + 1}>tau{order[2] + 1}"
+        contributions[key] = sign * total / (partition * beta * beta)
+
+    return contributions
+
+
+def two_particle_green_iwn_inu_inup(
+    energies: list[float],
+    op1: list[list[float]],
+    op2: list[list[float]],
+    op3: list[list[float]],
+    op4: list[list[float]],
+    beta: float,
+    fermionic_index_n: int,
+    bosonic_index_m: int,
+    bosonic_index_o: int,
+) -> complex:
+    """Total ``G^(2)(iω_n,iν_m,iν'_o)`` as a sum over time-order sectors."""
+    return sum(
+        two_particle_green_iwn_inu_inup_contributions(
+            energies,
+            op1,
+            op2,
+            op3,
+            op4,
+            beta,
+            fermionic_index_n,
+            bosonic_index_m,
+            bosonic_index_o,
+        ).values()
+    )
