@@ -14,6 +14,9 @@ from operators import (
     diagonalize_symmetric,
     lehmann_green_iwn,
     lehmann_green_tau,
+    two_particle_green_iwn_inu_inup,
+    two_particle_green_tau,
+    two_particle_green_tau_contributions,
     transform_to_eigenbasis,
 )
 
@@ -192,3 +195,126 @@ def test_lehmann_green_tau_matches_anderson_atom_formula():
     z = 1.0 + 2.0 * math.exp(beta * mu) + math.exp(beta * (2.0 * mu - U))
     expected = -(math.exp(tau * mu) + math.exp(beta * mu - tau * (U - mu))) / z
     assert g_tau == pytest.approx(expected, rel=1e-11, abs=1e-11)
+
+
+def test_two_particle_tau_contributions_select_single_time_sector():
+    energies = [0.0]
+    op = [[1.0]]
+    contrib = two_particle_green_tau_contributions(
+        energies, op, op, op, op, beta=3.0, tau1=2.0, tau2=1.0, tau3=0.5
+    )
+    assert contrib["tau1>tau2>tau3"] == pytest.approx(1.0)
+    assert sum(abs(v) for k, v in contrib.items() if k != "tau1>tau2>tau3") == pytest.approx(0.0)
+
+
+def test_two_particle_frequency_matches_numerical_tau_integral_with_regularization():
+    import cmath
+    import math
+
+    energies = [0.0]
+    op = [[1.0]]
+    beta = 2.0
+    n = 0
+    m = 0
+    o = 0
+
+    g_iw = two_particle_green_iwn_inu_inup(energies, op, op, op, op, beta, n, m, o)
+
+    omega = (2 * n + 1) * math.pi / beta
+    nu = 2 * m * math.pi / beta
+    nu_p = 2 * o * math.pi / beta
+
+    grid = 32
+    dt = beta / grid
+    numeric = 0.0 + 0.0j
+    for i in range(grid):
+        tau1 = (i + 0.5) * dt
+        for j in range(grid):
+            tau2 = (j + 0.5) * dt
+            for k in range(grid):
+                tau3 = (k + 0.5) * dt
+                g_tau = two_particle_green_tau(energies, op, op, op, op, beta, tau1, tau2, tau3)
+                kernel = cmath.exp(1j * omega * tau1 + 1j * nu * tau2 - 1j * nu_p * tau3)
+                numeric += kernel * g_tau
+
+    numeric *= (dt**3) / (beta * beta)
+    assert g_iw == pytest.approx(numeric, rel=2e-2, abs=2e-2)
+
+
+def _one_particle_time_ordered_green(
+    energies: list[float],
+    c_eig: list[list[float]],
+    cd_eig: list[list[float]],
+    beta: float,
+    tau_a: float,
+    tau_b: float,
+) -> float:
+    import math
+
+    z = sum(math.exp(-beta * e) for e in energies)
+    dt = tau_a - tau_b
+
+    def spectral_sum(delta_tau: float) -> float:
+        total = 0.0
+        for l in range(len(energies)):
+            w_l = math.exp(-beta * energies[l])
+            for m in range(len(energies)):
+                total += (
+                    w_l
+                    * math.exp(delta_tau * (energies[l] - energies[m]))
+                    * c_eig[l][m]
+                    * cd_eig[m][l]
+                )
+        return total / z
+
+    if dt >= 0.0:
+        return -spectral_sum(dt)
+    return spectral_sum(beta + dt)
+
+
+def test_two_particle_green_reduces_to_wick_in_non_interacting_limit():
+    U = 0.0
+    mu = 0.37
+    beta = 5.0
+    tau1, tau2, tau3 = 3.4, 1.1, 2.2
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+
+    c_up_occ = annihilation_operator_matrix(basis, orb=0)
+    cd_up_occ = creation_operator_matrix(basis, orb=0)
+    c_up_eig = transform_to_eigenbasis(c_up_occ, eigvecs)
+    cd_up_eig = transform_to_eigenbasis(cd_up_occ, eigvecs)
+
+    g2 = two_particle_green_tau(
+        energies, c_up_eig, cd_up_eig, c_up_eig, cd_up_eig, beta, tau1, tau2, tau3
+    )
+
+    g12 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau1, tau2)
+    g30 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau3, 0.0)
+    g10 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau1, 0.0)
+    g32 = _one_particle_time_ordered_green(energies, c_up_eig, cd_up_eig, beta, tau3, tau2)
+
+    wick = g12 * g30 - g10 * g32
+    assert g2 == pytest.approx(wick, rel=1e-11, abs=1e-11)
+
+
+def test_two_particle_static_sum_rule_equal_time_anticommutator():
+    U = 2.3
+    mu = 0.9
+    beta = 4.0
+    t = 1.7
+    eps = 1e-6
+    basis = [0b00, 0b01, 0b10, 0b11]
+
+    ham = anderson_impurity_hamiltonian(U=U, mu=mu, basis=basis)
+    energies, eigvecs = diagonalize_symmetric(ham)
+    c_up = transform_to_eigenbasis(annihilation_operator_matrix(basis, orb=0), eigvecs)
+    cd_up = transform_to_eigenbasis(creation_operator_matrix(basis, orb=0), eigvecs)
+    identity = [[1.0 if i == j else 0.0 for j in range(len(energies))] for i in range(len(energies))]
+
+    term_1 = two_particle_green_tau(energies, c_up, cd_up, identity, identity, beta, t + eps, t, 0.0)
+    term_2 = two_particle_green_tau(energies, cd_up, c_up, identity, identity, beta, t + eps, t, 0.0)
+
+    assert (term_1 + term_2) == pytest.approx(1.0, rel=2e-6, abs=2e-6)
