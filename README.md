@@ -41,3 +41,10 @@ Generate the six time-order contribution plot for a two-particle Green's functio
 ```bash
 python scripts/plot_two_particle_contributions.py --beta 10 --U 4 --mu 2 --tau1 8 --tau2 5 --tau3 2 --output g2_contributions.png
 ```
+
+Generate a single-frequency spin susceptibility comparison plot between
+the finite double-Matsubara sum and the single-frequency Lehmann formula:
+
+```bash
+python scripts/plot_single_frequency_spin_susceptibility.py --beta 10 --U 4 --mu 2 --omega-max 4 --nu-cutoff 4 --nup-cutoff 4 --output chi_spin_single_frequency.png
+```

@@ -41,8 +41,8 @@ def main() -> None:
 
     plt.figure(figsize=(6, 4))
     plt.plot(taus, values, linewidth=2)
-    plt.xlabel(r"$\\tau$")
-    plt.ylabel(r"$G(\\tau)$")
+    plt.xlabel(r"$\tau$")
+    plt.ylabel(r"$G(\tau)$")
     plt.title(f"Atomic Anderson model: beta={args.beta}, U={args.U}, mu={args.mu}")
     plt.grid(alpha=0.3)
     plt.tight_layout()
